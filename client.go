@@ -64,6 +64,7 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 			id, body, err := tube.Reserve(0 /* don't block others */)
 			if err == nil {
 				wait = 0 // drain the queue as fast as possible
+				wg.Add(1)
 				go c.work(wg, NewJob(bs, name, id, body))
 			} else if !isTimeoutOrDeadline(err) {
 				return err
@@ -104,7 +105,6 @@ func (c *Client) tubes(conn *beanstalk.Conn) map[string]*beanstalk.TubeSet {
 }
 
 func (c *Client) work(wg *sync.WaitGroup, j *Job) {
-	wg.Add(1)
 	defer wg.Done()
 	c.Handler.Work(j)
 }
