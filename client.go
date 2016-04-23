@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -14,7 +13,7 @@ import (
 	"github.com/kr/beanstalk"
 )
 
-// ErrQuitting is returned by Client when it is quitting
+// ErrClientHasQuit is returned by Client when it is quitting
 var ErrClientHasQuit = errors.New("client has quit")
 
 // Client defines parameters for running an beanstalk client.
@@ -22,6 +21,7 @@ type Client struct {
 	Network string
 	Addr    string
 	Handler Handler
+	mu      sync.Mutex // guards stop
 	stop    chan error
 }
 
@@ -48,10 +48,13 @@ func ConnectAndWork(network string, addr string, handler Handler) error {
 // new service goroutine for each. The service goroutines read the job and
 // then call c.Handler to process them.
 func (c *Client) Reserve(conn io.ReadWriteCloser) error {
+	c.mu.Lock()
 	c.stop = make(chan error)
+	c.mu.Unlock()
 	bs := beanstalk.NewConn(conn)
 	tubes := c.tubes(bs)
 	wg := &sync.WaitGroup{}
+	wg.Add(1)
 	go c.quitOnSignal(wg)
 
 	defer bs.Close()
@@ -67,6 +70,7 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 				wg.Add(1)
 				go c.work(wg, NewJob(bs, name, id, body))
 			} else if !isTimeoutOrDeadline(err) {
+				c.Stop()
 				return err
 			}
 			select {
@@ -86,7 +90,9 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 
 // Stop stops reserving jobs and wait for current workers to finish their job.
 func (c *Client) Stop() {
+	c.mu.Lock()
 	close(c.stop)
+	c.mu.Unlock()
 }
 
 func (c *Client) tubes(conn *beanstalk.Conn) map[string]*beanstalk.TubeSet {
@@ -110,7 +116,6 @@ func (c *Client) work(wg *sync.WaitGroup, j *Job) {
 }
 
 func (c *Client) quitOnSignal(wg *sync.WaitGroup) {
-	wg.Add(1)
 	defer wg.Done()
 
 	sigchan := make(chan os.Signal, 1)
@@ -124,6 +129,10 @@ func (c *Client) quitOnSignal(wg *sync.WaitGroup) {
 }
 
 func isTimeoutOrDeadline(err error) bool {
-	return strings.HasSuffix(err.Error(), beanstalk.ErrTimeout.Error()) ||
-		strings.HasSuffix(err.Error(), beanstalk.ErrDeadline.Error())
+	if connerr, isConnErr := err.(beanstalk.ConnError); isConnErr {
+		return connerr.Op == "reserve-with-timeout" &&
+			(connerr.Err == beanstalk.ErrTimeout || connerr.Err == beanstalk.ErrDeadline)
+	}
+
+	return false
 }

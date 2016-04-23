@@ -2,7 +2,9 @@ package workers
 
 import (
 	"fmt"
+	"io"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -10,6 +12,20 @@ import (
 
 	"github.com/kr/beanstalk"
 )
+
+type closedConnection struct{}
+
+func (i *closedConnection) Read(p []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (i *closedConnection) Write(p []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (i *closedConnection) Close() error {
+	return nil
+}
 
 func Example() {
 	mux := NewWorkMux()
@@ -41,6 +57,19 @@ func TestStopClient(t *testing.T) {
 
 	err := client.ConnectAndWork()
 	if err != ErrClientHasQuit {
+		t.Fail()
+	}
+}
+
+func TestUnexpectedErrorReturned(t *testing.T) {
+	client := &Client{
+		Handler: HandlerFunc(func(job *Job) {
+		}),
+	}
+
+	// this test will deadlock if fails
+	err := client.Reserve(&closedConnection{})
+	if err == nil || !strings.HasSuffix(err.Error(), io.EOF.Error()) {
 		t.Fail()
 	}
 }

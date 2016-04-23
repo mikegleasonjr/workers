@@ -8,7 +8,7 @@ import (
 // It matches the tube of each incoming job against a list
 // of registered tubes and calls the handler of that tube.
 type WorkMux struct {
-	mu sync.RWMutex
+	mu sync.RWMutex // guards muxEntry
 	m  map[string]muxEntry
 }
 
@@ -61,8 +61,8 @@ func (mux *WorkMux) Handler(tube string) Handler {
 
 // Tubes returns a list of tubes handled by the WorkMux.
 func (mux *WorkMux) Tubes() []string {
-	mux.mu.Lock()
-	defer mux.mu.Unlock()
+	mux.mu.RLock()
+	defer mux.mu.RUnlock()
 
 	tubes := make([]string, len(mux.m))
 	i := 0
